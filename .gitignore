@@ -1,0 +1,13 @@
+# Salida de build_netlify.py (se regenera)
+dist/
+
+# Nunca subir archivos reales: solo el ejemplo inventado
+*.csv
+!ejemplo.csv
+*.xlsx
+*.xls
+*.json
+*.zip
+
+__pycache__/
+.DS_Store

@@ -1,0 +1,7 @@
+SKU;DESCRIPCIÓN;PRECIO;INICIO;FIN;NOTAS
+00123;Café molido 400 g;89.50;2026-10-01;2026-10-31;
+00124;"Galletas; surtidas";45;2026-10-01;2026-10-15;"Texto con ""comillas"""
+00125;Agua natural 1 L;  12  ;01/10/2026;;"Nota en
+dos líneas"
+00126;;;;;
+00123;Café molido 400 g;89.50;2026-10-01;2026-10-31;

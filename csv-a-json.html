@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CSV a JSON para Fusion</title>
+<!--
+  Conversor CSV -> JSON para escenarios de Adobe Workfront Fusion.
+
+  REGLA: conversion FIEL. Cada fila del CSV es un objeto JSON cuyas llaves son los
+  encabezados EXACTOS del archivo y cuyos valores son el texto EXACTO de cada celda.
+  No se agregan campos, no se quitan columnas (ni las vacias), no se recortan
+  espacios, no se convierten numeros ni fechas.
+
+  Lo unico que se hace sobre los bytes es DECODIFICARLOS a texto (Excel en español
+  guarda el CSV en Windows-1252; el JSON sale en UTF-8, que es lo que lee Fusion).
+  Eso no cambia ningun caracter: cambia como se guarda.
+
+  Todo corre en el navegador. El archivo no se sube a ningun lado.
+  Sin dependencias externas: funciona abierto directo desde el disco.
+-->
+<style>
+  :root {
+    --tinta: #16181d; --tinta-2: #4f5663; --tinta-3: #6b7280;
+    --fondo: #f4f5f7; --sup: #ffffff; --linea: #e2e5ea; --linea-2: #cfd4dc;
+    --acento: #1f3a93; --acento-claro: #eef1fb;
+    --ok: #0f7a3d; --ok-claro: #e7f6ed; --alerta: #92580a; --alerta-claro: #fdf3e2;
+    --error: #b3261e; --error-claro: #fdecea;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fondo); color: var(--tinta);
+         font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  [hidden] { display: none !important; }
+  header { background: var(--sup); border-bottom: 1px solid var(--linea); }
+  .in { max-width: 920px; margin: 0 auto; padding: 0 20px; }
+  header .in { padding-top: 20px; padding-bottom: 18px; }
+  h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; color: var(--tinta-2); }
+  main { padding: 20px 0 48px; }
+  .card { background: var(--sup); border: 1px solid var(--linea); border-radius: 10px;
+          padding: 18px 20px; margin-bottom: 14px; }
+  h2 { margin: 0 0 12px; font-size: 15px; display: flex; align-items: center; gap: 10px; }
+  .n { width: 22px; height: 22px; border-radius: 50%; background: var(--acento); color: #fff;
+       display: grid; place-items: center; font-size: 12px; flex: none; }
+  .drop { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 28px 16px;
+          border: 1.5px dashed var(--linea-2); border-radius: 8px; cursor: pointer; text-align: center; }
+  .drop:hover, .drop.over { border-color: var(--acento); background: var(--acento-claro); }
+  .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .drop b { font-size: 14px; }
+  .drop small { color: var(--tinta-3); }
+  .privado { margin: 10px 0 0; color: var(--tinta-2); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .dato { background: var(--fondo); border-radius: 8px; padding: 10px 12px; }
+  .dato b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .dato span { font-size: 12px; color: var(--tinta-3); }
+  .fila { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-top: 12px; }
+  label.opt { display: flex; align-items: center; gap: 6px; }
+  select, input[type=number] { font: inherit; padding: 5px 8px; border: 1px solid var(--linea-2);
+                               border-radius: 6px; background: #fff; }
+  input[type=number] { width: 90px; }
+  .modos { display: grid; gap: 10px; }
+  .modo { display: flex; gap: 10px; padding: 12px; border: 1px solid var(--linea-2); border-radius: 8px; cursor: pointer; }
+  .modo:has(input:checked) { border-color: var(--acento); background: var(--acento-claro); }
+  .modo small { display: block; color: var(--tinta-2); }
+  .sub { margin: 8px 0 0 24px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  button { font: inherit; font-weight: 600; padding: 9px 16px; border-radius: 8px; cursor: pointer;
+           border: 1px solid transparent; background: var(--acento); color: #fff; }
+  button.sec { background: #fff; color: var(--acento); border-color: var(--linea-2); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .avisos { display: grid; gap: 8px; margin-top: 12px; }
+  .aviso { padding: 9px 12px; border-radius: 8px; font-size: 13px; }
+  .aviso.info { background: var(--acento-claro); }
+  .aviso.warn { background: var(--alerta-claro); color: var(--alerta); }
+  .aviso.err { background: var(--error-claro); color: var(--error); font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--linea); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--tinta-3); }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .checks li { margin: 4px 0; }
+  .checks { list-style: none; padding: 0; margin: 0; }
+  .ok { color: var(--ok); } .mal { color: var(--error); font-weight: 600; }
+  .scroll { overflow-x: auto; max-width: 100%; }
+  pre { background: #0f1422; color: #e2e8f0; padding: 12px 14px; border-radius: 8px; font-size: 12px;
+        overflow: auto; max-height: 320px; margin: 10px 0 0; }
+  .prev td, .prev th { white-space: nowrap; }
+  /* Clases en vez de style="": la version para Netlify usa una CSP que bloquea los estilos en linea. */
+  .mt { margin-top: 12px; }
+  .nota { margin: 0; color: var(--tinta-2); }
+  footer { color: var(--tinta-3); font-size: 12px; text-align: center; padding-bottom: 30px; }
+</style>
+</head>
+<body>
+
+<header><div class="in">
+  <h1>CSV a JSON para Fusion</h1>
+  <p>Convierte un CSV a JSON, completo o partido para el webhook.</p>
+</div></header>
+
+<main><div class="in">
+
+  <section class="card">
+    <h2><span class="n">1</span> Archivo</h2>
+    <label class="drop" id="drop">
+      <input type="file" id="archivo" accept=".csv,.txt,text/csv">
+      <b id="dropTitulo">Arrastra el CSV aquí o haz clic para buscarlo</b>
+      <small id="dropSub">Archivo .csv separado por punto y coma, coma o tabulador</small>
+    </label>
+    <p class="privado">El archivo se procesa en este navegador y no se sube a ningún lado.</p>
+    <div id="lectura" hidden>
+      <div class="fila">
+        <label class="opt">Codificación
+          <select id="codif">
+            <option value="auto">Automática</option>
+            <option value="utf-8">UTF-8</option>
+            <option value="windows-1252">Windows-1252 (Excel en español)</option>
+          </select>
+        </label>
+        <label class="opt">Separador
+          <select id="sep">
+            <option value="auto">Automático</option>
+            <option value=";">Punto y coma ( ; )</option>
+            <option value=",">Coma ( , )</option>
+            <option value="&#9;">Tabulador</option>
+          </select>
+        </label>
+      </div>
+      <div class="grid mt" id="stats"></div>
+      <div class="avisos" id="avisos"></div>
+    </div>
+  </section>
+
+  <section class="card" id="secSalida" hidden>
+    <h2><span class="n">2</span> Salida</h2>
+    <div class="modos">
+      <label class="modo">
+        <input type="radio" name="modo" value="completo" checked>
+        <span><b>Completo</b><small>Un solo archivo JSON con todas las filas. Para subirlo como documento.</small></span>
+      </label>
+      <label class="modo">
+        <input type="radio" name="modo" value="mb">
+        <span><b>Partido por tamaño</b><small>Partes que entran en un webhook de Fusion (máximo 5 MB por mensaje).</small></span>
+      </label>
+      <div class="sub" id="subMb" hidden>
+        <label class="opt">Máximo por parte <input type="number" id="maxMb" value="4.5" min="0.1" max="5" step="0.1"> MB</label>
+      </div>
+      <label class="modo">
+        <input type="radio" name="modo" value="filas">
+        <span><b>Partido por cantidad de filas</b><small>Partes con un número fijo de filas (por ejemplo, un lote por ejecución).</small></span>
+      </label>
+      <div class="sub" id="subFilas" hidden>
+        <label class="opt">Filas por parte <input type="number" id="porParte" value="500" min="1" step="1"></label>
+      </div>
+    </div>
+    <div class="fila">
+      <button id="convertir">Convertir</button>
+    </div>
+  </section>
+
+  <section class="card" id="secResultado" hidden>
+    <h2><span class="n">3</span> Resultado</h2>
+    <ul class="checks" id="checks"></ul>
+    <div class="scroll mt">
+      <table>
+        <thead><tr><th>Archivo</th><th>Filas</th><th>Tamaño</th><th></th></tr></thead>
+        <tbody id="partes"></tbody>
+      </table>
+    </div>
+    <div class="fila">
+      <button id="bajarZip" class="sec" hidden>Descargar todas las partes (ZIP)</button>
+    </div>
+  </section>
+
+  <section class="card" id="secVista" hidden>
+    <h2>Vista previa</h2>
+    <p class="nota">Las primeras filas del CSV y cómo quedan en el JSON.</p>
+    <div class="scroll mt"><table class="prev"><thead id="prevHead"></thead><tbody id="prevBody"></tbody></table></div>
+    <pre id="prevJson"></pre>
+  </section>
+
+</div></main>
+<footer>Conversión fiel: mismos encabezados, mismos valores, sin campos agregados ni columnas quitadas.</footer>
+
+<script id="core">
+/* ---------------------------------------------------------------------------
+   Nucleo: funciones puras (sin DOM). Se prueban tambien fuera del navegador.
+   --------------------------------------------------------------------------- */
+const Core = (function () {
+  "use strict";
+
+  /* Bytes -> texto. UTF-8 si los bytes son UTF-8 valido; si no, Windows-1252.
+     El BOM no es dato: se quita (TextDecoder lo hace solo en UTF-8). */
+  function decodificar(bytes, forzar) {
+    const bom = bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF;
+    if (forzar === "utf-8") return { texto: new TextDecoder("utf-8").decode(bytes), codif: bom ? "UTF-8 con BOM" : "UTF-8" };
+    if (forzar === "windows-1252") return { texto: new TextDecoder("windows-1252").decode(bytes), codif: "Windows-1252" };
+    try {
+      return { texto: new TextDecoder("utf-8", { fatal: true }).decode(bytes), codif: bom ? "UTF-8 con BOM" : "UTF-8" };
+    } catch (e) {
+      return { texto: new TextDecoder("windows-1252").decode(bytes), codif: "Windows-1252" };
+    }
+  }
+
+  /* El separador mas frecuente en la primera linea. */
+  function detectarSeparador(texto) {
+    const fin = texto.search(/\r?\n/);
+    const linea = fin < 0 ? texto : texto.slice(0, fin);
+    let mejor = ";", max = -1;
+    for (const s of [";", ",", "\t"]) {
+      const n = linea.split(s).length - 1;
+      if (n > max) { max = n; mejor = s; }
+    }
+    return mejor;
+  }
+
+  /* Parser CSV (RFC 4180), mismo comportamiento que el modulo csv de Python:
+     comillas al inicio del campo abren un campo entrecomillado, "" es una
+     comilla literal, dentro de comillas el separador y los saltos de linea son
+     texto. Las lineas vacias no son filas: se cuentan aparte. Una linea con solo
+     "" SI es una fila (un valor vacio escrito entre comillas), igual que en Python:
+     por eso se recuerda si el campo abrio comillas (`citado`). */
+  function parsear(texto, sep) {
+    const filas = [];
+    let fila = [], campo = "", enComillas = false, citado = false, i = 0, vacias = 0;
+    const n = texto.length;
+    const cerrarFila = () => {
+      fila.push(campo);
+      if (fila.length === 1 && fila[0] === "" && !citado) vacias++;
+      else filas.push(fila);
+      fila = []; campo = ""; citado = false;
+    };
+    while (i < n) {
+      const c = texto[i];
+      if (enComillas) {
+        if (c === '"') {
+          if (texto[i + 1] === '"') { campo += '"'; i += 2; continue; }
+          enComillas = false; i++; continue;
+        }
+        campo += c; i++; continue;
+      }
+      if (c === '"' && campo === "") { enComillas = true; citado = true; i++; continue; }
+      if (c === sep) { fila.push(campo); campo = ""; citado = false; i++; continue; }
+      if (c === "\r") { if (texto[i + 1] === "\n") i++; cerrarFila(); i++; continue; }
+      if (c === "\n") { cerrarFila(); i++; continue; }
+      campo += c; i++;
+    }
+    if (campo !== "" || fila.length || citado) cerrarFila();
+    return { filas, vacias };
+  }
+
+  /* Diagnostico: lo que impediria una conversion fiel, y avisos informativos. */
+  function revisar(encabezado, datos) {
+    const errores = [], avisos = [];
+    const vistos = new Map();
+    encabezado.forEach((h, i) => {
+      if (vistos.has(h)) errores.push(`Las columnas ${vistos.get(h) + 1} y ${i + 1} se llaman igual ("${h}"): en JSON una pisaría a la otra.`);
+      else vistos.set(h, i);
+    });
+    const malas = [];
+    datos.forEach((f, i) => { if (f.length !== encabezado.length) malas.push(i + 2); });
+    if (malas.length) {
+      errores.push(`${malas.length} fila(s) no tienen ${encabezado.length} columnas (líneas ${malas.slice(0, 8).join(", ")}${malas.length > 8 ? "…" : ""}). Convertirlas perdería o correría datos.`);
+    }
+    const raros = encabezado.map((h, i) => [h, i]).filter(([h]) => /[^\x20-\x7E]/.test(h));
+    if (raros.length) {
+      avisos.push("Encabezados con tildes u otros caracteres, se dejan tal cual: " +
+        raros.map(([h, i]) => `columna ${i + 1} "${h}"`).join(", ") + ".");
+    }
+    const unicas = new Set(datos.map((f) => f.join("\u001f"))).size;
+    if (unicas < datos.length) {
+      avisos.push(`${(datos.length - unicas).toLocaleString("es-MX")} filas son copias exactas de otra fila (${unicas.toLocaleString("es-MX")} distintas). Se convierten todas, sin quitar ninguna.`);
+    }
+    return { errores, avisos };
+  }
+
+  /* Fila -> objeto con los encabezados exactos como llaves y el texto exacto. */
+  function aObjetos(encabezado, datos) {
+    return datos.map((f) => {
+      const o = {};
+      for (let j = 0; j < encabezado.length; j++) o[encabezado[j]] = f[j];
+      return o;
+    });
+  }
+
+  const bytesDe = (s) => new TextEncoder().encode(s).length;
+
+  /* Particiones. Cada parte es un arreglo JSON compacto. */
+  function partir(objetos, modo, valor) {
+    if (modo === "completo") return [objetos];
+    if (modo === "filas") {
+      const k = Math.max(1, Math.floor(valor));
+      const partes = [];
+      for (let i = 0; i < objetos.length; i += k) partes.push(objetos.slice(i, i + k));
+      return partes;
+    }
+    // por tamaño: acumula hasta el tope en bytes UTF-8, contando corchetes y comas
+    const tope = Math.floor(valor * 1048576);
+    const partes = [];
+    let actual = [], tam = 2;
+    for (const o of objetos) {
+      const t = bytesDe(JSON.stringify(o)) + (actual.length ? 1 : 0);
+      if (actual.length && tam + t > tope) { partes.push(actual); actual = []; tam = 2; }
+      actual.push(o);
+      tam += t;
+    }
+    if (actual.length) partes.push(actual);
+    return partes;
+  }
+
+  /* Verificacion sobre los TEXTOS que se van a descargar (no sobre la memoria):
+     se vuelven a leer y se comparan contra las filas del CSV. */
+  function verificar(encabezado, datos, textos) {
+    const res = [];
+    let juntas = [];
+    for (const t of textos) juntas = juntas.concat(JSON.parse(t));
+    res.push(["Filas convertidas", juntas.length === datos.length,
+      `${juntas.length.toLocaleString("es-MX")} de ${datos.length.toLocaleString("es-MX")}`]);
+    const llavesOk = juntas.every((o) => {
+      const k = Object.keys(o);
+      return k.length === encabezado.length && k.every((x, i) => x === encabezado[i]);
+    });
+    res.push(["Cada objeto tiene exactamente las columnas del CSV, en el mismo orden", llavesOk,
+      `${encabezado.length} columnas`]);
+    let iguales = juntas.length === datos.length;
+    for (let i = 0; iguales && i < datos.length; i++) {
+      for (let j = 0; j < encabezado.length; j++) {
+        if (juntas[i][encabezado[j]] !== datos[i][j]) { iguales = false; break; }
+      }
+    }
+    res.push(["Cada valor es idéntico al del CSV, fila por fila", iguales, iguales ? "sin diferencias" : "hay diferencias"]);
+    if (textos.length > 1) res.push(["Las partes juntas dan las filas en el orden original", iguales, `${textos.length} partes`]);
+    return res;
+  }
+
+  /* ZIP sin compresion (metodo store), para bajar varias partes de una vez. */
+  const TABLA = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+    return t;
+  })();
+  function crc32(b) { let c = 0xffffffff; for (let i = 0; i < b.length; i++) c = TABLA[(c ^ b[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+  function zip(archivos) {
+    const enc = new TextEncoder(), partes = [], central = [];
+    let off = 0;
+    for (const a of archivos) {
+      const nom = enc.encode(a.nombre), datos = enc.encode(a.texto), crc = crc32(datos);
+      const l = new DataView(new ArrayBuffer(30));
+      l.setUint32(0, 0x04034b50, true); l.setUint16(4, 20, true); l.setUint16(6, 0x0800, true);
+      l.setUint16(12, 0x2821, true); l.setUint32(14, crc, true); l.setUint32(18, datos.length, true);
+      l.setUint32(22, datos.length, true); l.setUint16(26, nom.length, true);
+      partes.push(new Uint8Array(l.buffer), nom, datos);
+      const c = new DataView(new ArrayBuffer(46));
+      c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true);
+      c.setUint16(8, 0x0800, true); c.setUint16(14, 0x2821, true); c.setUint32(16, crc, true);
+      c.setUint32(20, datos.length, true); c.setUint32(24, datos.length, true);
+      c.setUint16(28, nom.length, true); c.setUint32(42, off, true);
+      central.push(new Uint8Array(c.buffer), nom);
+      off += 30 + nom.length + datos.length;
+    }
+    const tamC = central.reduce((s, b) => s + b.length, 0);
+    const f = new DataView(new ArrayBuffer(22));
+    f.setUint32(0, 0x06054b50, true); f.setUint16(8, archivos.length, true);
+    f.setUint16(10, archivos.length, true); f.setUint32(12, tamC, true); f.setUint32(16, off, true);
+    return new Blob(partes.concat(central, [new Uint8Array(f.buffer)]), { type: "application/zip" });
+  }
+
+  return { decodificar, detectarSeparador, parsear, revisar, aObjetos, partir, verificar, zip, bytesDe };
+})();
+if (typeof module !== "undefined") module.exports = Core;
+</script>
+
+<script>
+/* ---------------------------------------------------------------------------
+   Interfaz. Todo el DOM se arma con createElement/textContent.
+   --------------------------------------------------------------------------- */
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, txt, cls) => { const e = document.createElement(tag); if (txt !== undefined) e.textContent = txt; if (cls) e.className = cls; return e; };
+  const fmt = (n) => n.toLocaleString("es-MX");
+  const mb = (b) => b >= 1048576 ? (b / 1048576).toFixed(2) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
+
+  let bytes = null, nombreBase = "datos", lectura = null, salidas = [];
+
+  function leer() {
+    const d = Core.decodificar(bytes, $("codif").value);
+    const sep = $("sep").value === "auto" ? Core.detectarSeparador(d.texto) : $("sep").value;
+    const { filas, vacias } = Core.parsear(d.texto, sep);
+    const encabezado = filas[0] || [];
+    const datos = filas.slice(1);
+    const rev = Core.revisar(encabezado, datos);
+    lectura = { encabezado, datos, codif: d.codif, sep, vacias, rev };
+    pintarLectura();
+    $("secResultado").hidden = true;
+    salidas = [];
+  }
+
+  function pintarLectura() {
+    const l = lectura;
+    const nombreSep = { ";": "punto y coma", ",": "coma", "\t": "tabulador" }[l.sep];
+    const stats = $("stats"); stats.textContent = "";
+    [[fmt(l.datos.length), "filas de datos"], [fmt(l.encabezado.length), "columnas"],
+     [l.codif, "codificación detectada"], [nombreSep, "separador"]].forEach(([v, t]) => {
+      const d = el("div", undefined, "dato"); d.append(el("b", v), el("span", t)); stats.append(d);
+    });
+    const av = $("avisos"); av.textContent = "";
+    l.rev.errores.forEach((m) => av.append(el("div", m, "aviso err")));
+    l.rev.avisos.forEach((m) => av.append(el("div", m, "aviso warn")));
+    if (l.vacias) av.append(el("div", `${fmt(l.vacias)} línea(s) vacía(s) en el archivo: no son filas y no se convierten.`, "aviso info"));
+    if (l.codif === "Windows-1252") av.append(el("div", "El archivo está en Windows-1252 (como exporta Excel en español). El JSON sale en UTF-8, que es lo que lee Fusion; los caracteres no cambian.", "aviso info"));
+    $("lectura").hidden = false;
+    $("secSalida").hidden = false;
+    $("convertir").disabled = l.rev.errores.length > 0 || !l.datos.length;
+    pintarVista();
+  }
+
+  function pintarVista() {
+    const l = lectura, head = $("prevHead"), body = $("prevBody");
+    head.textContent = ""; body.textContent = "";
+    const trh = el("tr"); trh.append(el("th", "#"));
+    l.encabezado.forEach((h) => trh.append(el("th", h))); head.append(trh);
+    l.datos.slice(0, 3).forEach((f, i) => {
+      const tr = el("tr"); tr.append(el("td", String(i + 1), "num"));
+      f.forEach((v) => tr.append(el("td", v))); body.append(tr);
+    });
+    if (l.datos.length && !l.rev.errores.length) {
+      const o = Core.aObjetos(l.encabezado, l.datos.slice(0, 1))[0];
+      $("prevJson").textContent = JSON.stringify(o, null, 2);
+    } else $("prevJson").textContent = "";
+    $("secVista").hidden = false;
+  }
+
+  function convertir() {
+    const l = lectura;
+    const modo = document.querySelector("input[name=modo]:checked").value;
+    const valor = modo === "mb" ? Math.min(5, parseFloat($("maxMb").value) || 4.5) : parseInt($("porParte").value, 10) || 500;
+    const objetos = Core.aObjetos(l.encabezado, l.datos);
+    const partes = Core.partir(objetos, modo, valor);
+    const total = partes.length;
+    let fila = 1;
+    salidas = partes.map((p, i) => {
+      const texto = JSON.stringify(p);
+      const nombre = total === 1 ? `${nombreBase}.json`
+        : `${nombreBase}_parte-${String(i + 1).padStart(2, "0")}-de-${String(total).padStart(2, "0")}.json`;
+      const s = { nombre, texto, filas: p.length, desde: fila, hasta: fila + p.length - 1, bytes: Core.bytesDe(texto) };
+      fila += p.length;
+      return s;
+    });
+    const checks = Core.verificar(l.encabezado, l.datos, salidas.map((s) => s.texto));
+    if (modo === "mb") {
+      const max = Math.max(...salidas.map((s) => s.bytes));
+      checks.push(["Cada parte entra en un webhook de Fusion (máximo 5 MB)", max <= 5 * 1048576, `la mayor pesa ${mb(max)}`]);
+    }
+    pintarResultado(checks);
+  }
+
+  function descargar(blob, nombre) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = nombre;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  }
+
+  function pintarResultado(checks) {
+    const ul = $("checks"); ul.textContent = "";
+    checks.forEach(([txt, ok, det]) => {
+      const li = el("li");
+      li.append(el("span", ok ? "✓ " : "✗ ", ok ? "ok" : "mal"), document.createTextNode(`${txt}: ${det}`));
+      ul.append(li);
+    });
+    const tb = $("partes"); tb.textContent = "";
+    salidas.forEach((s) => {
+      const tr = el("tr");
+      tr.append(el("td", s.nombre), el("td", `${fmt(s.filas)} (filas ${fmt(s.desde)} a ${fmt(s.hasta)})`, "num"), el("td", mb(s.bytes), "num"));
+      const td = el("td"); const b = el("button", "Descargar", "sec");
+      b.addEventListener("click", () => descargar(new Blob([s.texto], { type: "application/json" }), s.nombre));
+      td.append(b); tr.append(td); tb.append(tr);
+    });
+    $("bajarZip").hidden = salidas.length < 2;
+    $("secResultado").hidden = false;
+    $("secResultado").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  async function cargar(f) {
+    if (!f) return;
+    if (/\.xlsx?$/i.test(f.name)) {
+      // Sin esto quedarian a la vista los resultados del archivo anterior.
+      bytes = null; lectura = null; salidas = [];
+      ["lectura", "secSalida", "secResultado", "secVista"].forEach((id) => { $(id).hidden = true; });
+      $("dropTitulo").textContent = f.name;
+      $("dropSub").textContent = "Esto es un Excel (.xlsx). Guárdalo como CSV desde Excel y súbelo de nuevo.";
+      return;
+    }
+    bytes = new Uint8Array(await f.arrayBuffer());
+    nombreBase = f.name.replace(/\.[^.]+$/, "").replace(/[^\w\-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "datos";
+    $("dropTitulo").textContent = f.name;
+    $("dropSub").textContent = `${mb(bytes.length)} · haz clic o arrastra otro para cambiarlo`;
+    leer();
+  }
+
+  const drop = $("drop");
+  ["dragenter", "dragover"].forEach((e) => drop.addEventListener(e, (ev) => { ev.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((e) => drop.addEventListener(e, () => drop.classList.remove("over")));
+  drop.addEventListener("drop", (ev) => { ev.preventDefault(); cargar(ev.dataTransfer.files[0]); });
+  ["dragover", "drop"].forEach((e) => window.addEventListener(e, (ev) => { if (!drop.contains(ev.target)) ev.preventDefault(); }));
+  $("archivo").addEventListener("change", (ev) => cargar(ev.target.files[0]));
+  $("codif").addEventListener("change", () => bytes && leer());
+  $("sep").addEventListener("change", () => bytes && leer());
+  document.querySelectorAll("input[name=modo]").forEach((r) => r.addEventListener("change", () => {
+    const m = document.querySelector("input[name=modo]:checked").value;
+    $("subMb").hidden = m !== "mb"; $("subFilas").hidden = m !== "filas";
+  }));
+  $("convertir").addEventListener("click", convertir);
+  $("bajarZip").addEventListener("click", () =>
+    descargar(Core.zip(salidas.map((s) => ({ nombre: s.nombre, texto: s.texto }))), `${nombreBase}_partes.zip`));
+})();
+</script>
+</body>
+</html>

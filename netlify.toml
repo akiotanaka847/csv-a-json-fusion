@@ -1,0 +1,5 @@
+# Para publicar conectando este repositorio a Netlify: arma dist/ y publica eso.
+# Las cabeceras de seguridad van en dist/_headers (las genera build_netlify.py).
+[build]
+  command = "python3 build_netlify.py"
+  publish = "dist"
