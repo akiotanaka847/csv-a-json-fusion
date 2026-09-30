@@ -18,7 +18,7 @@ Todo corre en el navegador: el archivo **no se sube a ningún lado**.
 
 4. **Convertir**. Antes de dejarte descargar, vuelve a leer lo que generó y lo compara contra el CSV fila por fila.
 
-Un Excel (`.xlsx`) hay que guardarlo antes como CSV desde Excel.
+Un Excel (`.xlsx`) hay que guardarlo antes como CSV (o como Texto Unicode) desde Excel.
 
 ## Qué garantiza
 
@@ -26,7 +26,7 @@ La conversión es **fiel**:
 
 - Las llaves son los encabezados **exactos** del archivo; los valores, el texto **exacto** de cada celda.
 - No agrega campos, no quita columnas (ni las vacías), no recorta espacios, no convierte números ni fechas: `00123` sigue siendo `"00123"`.
-- Lo único que cambia es cómo se guarda el texto: un CSV de Excel en español viene en Windows-1252 y el JSON sale en UTF-8, que es lo que lee Fusion. Los caracteres son los mismos.
+- Lo único que cambia es cómo se guarda el texto: un CSV de Excel en español viene en Windows-1252 (y el "Texto Unicode" de Excel, en UTF-16) y el JSON sale en UTF-8, que es lo que lee Fusion. Los caracteres son los mismos.
 
 Ejemplo, con `ejemplo.csv`:
 
@@ -37,9 +37,10 @@ Ejemplo, con `ejemplo.csv`:
 Si algo impediría una conversión fiel, **no convierte** y dice por qué:
 
 - dos columnas con el mismo nombre (en JSON una pisaría a la otra);
-- filas con más o menos columnas que el encabezado.
+- filas con más o menos columnas que el encabezado;
+- comillas que se abren y nunca se cierran (todo lo que sigue quedaría dentro de una sola celda).
 
-Además avisa, sin cambiar nada, cuando hay filas repetidas, líneas vacías o encabezados con tildes.
+Los errores dicen en qué fila está el problema, numerada como en Excel. Además avisa, sin cambiar nada, cuando hay filas repetidas, líneas vacías o encabezados con tildes.
 
 ## En Fusion
 
@@ -77,7 +78,7 @@ Si queda algo que rompa esa política, el script borra la carpeta y avisa.
 python3 pruebas/paridad.py
 ```
 
-Corre el mismo código de la página (con Node) y el módulo `csv` de Python sobre los mismos datos y exige el mismo resultado: comillas, `""` escapadas, separadores y saltos de línea dentro de comillas, CRLF, BOM, Windows-1252, líneas vacías y 5.000 textos al azar. Después prueba los tres modos de salida de punta a punta sobre `ejemplo.csv`. Requiere `python3` y `node`.
+Corre el mismo código de la página (con Node) y el módulo `csv` de Python sobre los mismos datos y exige el mismo resultado: las mismas filas celda por celda, el mismo número de fila y las mismas comillas sin cerrar (contra el modo estricto de Python). Cubre comillas, `""` escapadas, separadores y saltos de línea dentro de comillas, CRLF, BOM, Windows-1252, UTF-16, detección del separador, líneas vacías y 5.000 textos al azar. Después prueba los tres modos de salida de punta a punta sobre `ejemplo.csv`. Requiere `python3` y `node`.
 
 ## Archivos
 

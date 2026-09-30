@@ -45,6 +45,7 @@
   .drop { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 28px 16px;
           border: 1.5px dashed var(--linea-2); border-radius: 8px; cursor: pointer; text-align: center; }
   .drop:hover, .drop.over { border-color: var(--acento); background: var(--acento-claro); }
+  .drop:focus-within { border-color: var(--acento); outline: 2px solid var(--acento); outline-offset: 2px; }
   .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
   .drop b { font-size: 14px; }
   .drop small { color: var(--tinta-3); }
@@ -187,12 +188,15 @@
 const Core = (function () {
   "use strict";
 
-  /* Bytes -> texto. UTF-8 si los bytes son UTF-8 valido; si no, Windows-1252.
-     El BOM no es dato: se quita (TextDecoder lo hace solo en UTF-8). */
+  /* Bytes -> texto. UTF-16 si trae su BOM (Excel "Texto Unicode"); si no, UTF-8
+     si los bytes son UTF-8 valido; si no, Windows-1252. El BOM no es dato: se
+     quita (TextDecoder lo hace solo). */
   function decodificar(bytes, forzar) {
     const bom = bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF;
     if (forzar === "utf-8") return { texto: new TextDecoder("utf-8").decode(bytes), codif: bom ? "UTF-8 con BOM" : "UTF-8" };
     if (forzar === "windows-1252") return { texto: new TextDecoder("windows-1252").decode(bytes), codif: "Windows-1252" };
+    if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) return { texto: new TextDecoder("utf-16le").decode(bytes), codif: "UTF-16" };
+    if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) return { texto: new TextDecoder("utf-16be").decode(bytes), codif: "UTF-16" };
     try {
       return { texto: new TextDecoder("utf-8", { fatal: true }).decode(bytes), codif: bom ? "UTF-8 con BOM" : "UTF-8" };
     } catch (e) {
@@ -200,14 +204,21 @@ const Core = (function () {
     }
   }
 
-  /* El separador mas frecuente en la primera linea. */
+  /* El separador mas frecuente en el primer registro, contando solo FUERA de
+     comillas: en "Nombre, completo";"Ciudad, estado" el separador es ; aunque
+     haya mas comas. */
   function detectarSeparador(texto) {
-    const fin = texto.search(/\r?\n/);
-    const linea = fin < 0 ? texto : texto.slice(0, fin);
+    const cuenta = { ";": 0, ",": 0, "\t": 0 };
+    let enComillas = false;
+    for (let i = 0; i < texto.length; i++) {
+      const c = texto[i];
+      if (c === '"') enComillas = !enComillas;
+      else if (!enComillas && (c === "\n" || c === "\r")) break;
+      else if (!enComillas && c in cuenta) cuenta[c]++;
+    }
     let mejor = ";", max = -1;
     for (const s of [";", ",", "\t"]) {
-      const n = linea.split(s).length - 1;
-      if (n > max) { max = n; mejor = s; }
+      if (cuenta[s] > max) { max = cuenta[s]; mejor = s; }
     }
     return mejor;
   }
@@ -217,15 +228,19 @@ const Core = (function () {
      comilla literal, dentro de comillas el separador y los saltos de linea son
      texto. Las lineas vacias no son filas: se cuentan aparte. Una linea con solo
      "" SI es una fila (un valor vacio escrito entre comillas), igual que en Python:
-     por eso se recuerda si el campo abrio comillas (`citado`). */
+     por eso se recuerda si el campo abrio comillas (`citado`).
+     Devuelve ademas el numero de cada fila tal como la numera Excel (encabezado =
+     1, las lineas vacias cuentan) y, si el archivo termina con comillas abiertas,
+     en que fila se abrieron: desde ahi todo quedo dentro de una sola celda. */
   function parsear(texto, sep) {
-    const filas = [];
-    let fila = [], campo = "", enComillas = false, citado = false, i = 0, vacias = 0;
+    const filas = [], numeros = [];
+    let fila = [], campo = "", enComillas = false, citado = false, i = 0, vacias = 0, registro = 0;
     const n = texto.length;
     const cerrarFila = () => {
       fila.push(campo);
+      registro++;
       if (fila.length === 1 && fila[0] === "" && !citado) vacias++;
-      else filas.push(fila);
+      else { filas.push(fila); numeros.push(registro); }
       fila = []; campo = ""; citado = false;
     };
     while (i < n) {
@@ -243,22 +258,29 @@ const Core = (function () {
       if (c === "\n") { cerrarFila(); i++; continue; }
       campo += c; i++;
     }
+    const comillaAbierta = enComillas ? registro + 1 : 0;
     if (campo !== "" || fila.length || citado) cerrarFila();
-    return { filas, vacias };
+    return { filas, vacias, numeros, comillaAbierta };
   }
 
-  /* Diagnostico: lo que impediria una conversion fiel, y avisos informativos. */
-  function revisar(encabezado, datos) {
+  /* Diagnostico: lo que impediria una conversion fiel, y avisos informativos.
+     `lectura` es lo que devolvio parsear (numeros de fila y comillas abiertas). */
+  function revisar(encabezado, datos, lectura) {
     const errores = [], avisos = [];
+    const numeros = (lectura && lectura.numeros) || [];
+    const numFila = (i) => numeros[i + 1] || i + 2;   // i: indice en datos
+    if (lectura && lectura.comillaAbierta) {
+      errores.push(`La fila ${lectura.comillaAbierta} abre comillas que nunca se cierran: todo lo que sigue en el archivo quedaría dentro de una sola celda.`);
+    }
     const vistos = new Map();
     encabezado.forEach((h, i) => {
       if (vistos.has(h)) errores.push(`Las columnas ${vistos.get(h) + 1} y ${i + 1} se llaman igual ("${h}"): en JSON una pisaría a la otra.`);
       else vistos.set(h, i);
     });
     const malas = [];
-    datos.forEach((f, i) => { if (f.length !== encabezado.length) malas.push(i + 2); });
+    datos.forEach((f, i) => { if (f.length !== encabezado.length) malas.push(numFila(i)); });
     if (malas.length) {
-      errores.push(`${malas.length} fila(s) no tienen ${encabezado.length} columnas (líneas ${malas.slice(0, 8).join(", ")}${malas.length > 8 ? "…" : ""}). Convertirlas perdería o correría datos.`);
+      errores.push(`${malas.length} fila(s) no tienen ${encabezado.length} columnas (fila ${malas.slice(0, 8).join(", ")}${malas.length > 8 ? "…" : ""}, numeradas como en Excel). Convertirlas perdería o correría datos.`);
     }
     const raros = encabezado.map((h, i) => [h, i]).filter(([h]) => /[^\x20-\x7E]/.test(h));
     if (raros.length) {
@@ -267,15 +289,18 @@ const Core = (function () {
     }
     const unicas = new Set(datos.map((f) => f.join("\u001f"))).size;
     if (unicas < datos.length) {
-      avisos.push(`${(datos.length - unicas).toLocaleString("es-MX")} filas son copias exactas de otra fila (${unicas.toLocaleString("es-MX")} distintas). Se convierten todas, sin quitar ninguna.`);
+      const copias = datos.length - unicas;
+      avisos.push(`${copias === 1 ? "1 fila es copia exacta" : `${copias.toLocaleString("es-MX")} filas son copias exactas`} de otra fila (${unicas.toLocaleString("es-MX")} distintas). Se convierten todas, sin quitar ninguna.`);
     }
     return { errores, avisos };
   }
 
-  /* Fila -> objeto con los encabezados exactos como llaves y el texto exacto. */
+  /* Fila -> objeto con los encabezados exactos como llaves y el texto exacto.
+     Objeto SIN prototipo: en un objeto normal, una columna llamada "__proto__"
+     no se guarda como llave (se come la asignacion) y desapareceria del JSON. */
   function aObjetos(encabezado, datos) {
     return datos.map((f) => {
-      const o = {};
+      const o = Object.create(null);
       for (let j = 0; j < encabezado.length; j++) o[encabezado[j]] = f[j];
       return o;
     });
@@ -384,10 +409,11 @@ if (typeof module !== "undefined") module.exports = Core;
   function leer() {
     const d = Core.decodificar(bytes, $("codif").value);
     const sep = $("sep").value === "auto" ? Core.detectarSeparador(d.texto) : $("sep").value;
-    const { filas, vacias } = Core.parsear(d.texto, sep);
+    const p = Core.parsear(d.texto, sep);
+    const { filas, vacias } = p;
     const encabezado = filas[0] || [];
     const datos = filas.slice(1);
-    const rev = Core.revisar(encabezado, datos);
+    const rev = Core.revisar(encabezado, datos, p);
     lectura = { encabezado, datos, codif: d.codif, sep, vacias, rev };
     pintarLectura();
     $("secResultado").hidden = true;
@@ -407,6 +433,7 @@ if (typeof module !== "undefined") module.exports = Core;
     l.rev.avisos.forEach((m) => av.append(el("div", m, "aviso warn")));
     if (l.vacias) av.append(el("div", `${fmt(l.vacias)} línea(s) vacía(s) en el archivo: no son filas y no se convierten.`, "aviso info"));
     if (l.codif === "Windows-1252") av.append(el("div", "El archivo está en Windows-1252 (como exporta Excel en español). El JSON sale en UTF-8, que es lo que lee Fusion; los caracteres no cambian.", "aviso info"));
+    if (l.codif === "UTF-16") av.append(el("div", "El archivo está en UTF-16 (\"Texto Unicode\" de Excel). El JSON sale en UTF-8, que es lo que lee Fusion; los caracteres no cambian.", "aviso info"));
     $("lectura").hidden = false;
     $("secSalida").hidden = false;
     $("convertir").disabled = l.rev.errores.length > 0 || !l.datos.length;
@@ -447,7 +474,7 @@ if (typeof module !== "undefined") module.exports = Core;
     });
     const checks = Core.verificar(l.encabezado, l.datos, salidas.map((s) => s.texto));
     if (modo === "mb") {
-      const max = Math.max(...salidas.map((s) => s.bytes));
+      const max = salidas.reduce((m, s) => Math.max(m, s.bytes), 0);
       checks.push(["Cada parte entra en un webhook de Fusion (máximo 5 MB)", max <= 5 * 1048576, `la mayor pesa ${mb(max)}`]);
     }
     pintarResultado(checks);

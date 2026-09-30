@@ -66,8 +66,6 @@ def main():
     # Netlify (frame-ancestors no aplica en <meta>; va solo en la cabecera).
     nuevo = nuevo.replace('<meta name="viewport"',
                           f'<meta http-equiv="Content-Security-Policy" content="{CSP}">\n<meta name="viewport"', 1)
-    # El reemplazo de `ui` deja un </script> huerfano delante: se limpia.
-    nuevo = nuevo.replace('<script src="core.js"></script></script>\n', '<script src="core.js"></script>\n', 1)
 
     destino = pathlib.Path(a.out)
     if destino.exists():
